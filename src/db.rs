@@ -117,15 +117,16 @@ struct DbInner {
 impl DbInner {
 	fn open(options: &Options) -> Result<DbInner> {
 		std::fs::create_dir_all(&options.path)?;
-		options.validate_metadata()?;
+		let salt = options.load_and_validate_metadata()?;
 		let mut columns = Vec::with_capacity(options.columns.len());
 		let mut commit_overlay = Vec::with_capacity(options.columns.len());
 		for c in 0 .. options.columns.len() {
-			columns.push(Column::open(c as ColId, &options)?);
+			columns.push(Column::open(c as ColId, &options, salt.clone())?);
 			commit_overlay.push(
 				HashMap::with_hasher(std::hash::BuildHasherDefault::<IdentityKeyHash>::default())
 			);
 		}
+		log::debug!(target: "parity-db", "Opened db {:?}, salt={:?}", options, salt);
 		Ok(DbInner {
 			columns,
 			options: options.clone(),
@@ -395,7 +396,7 @@ impl DbInner {
 			let reader = match self.log.read_next(validation_mode) {
 				Ok(reader) => reader,
 				Err(Error::Corruption(_)) if validation_mode => {
-					log::info!(target: "parity-db", "Bad log header");
+					log::debug!(target: "parity-db", "Bad log header");
 					self.log.clear_logs()?;
 					return Ok(false);
 				}
@@ -465,7 +466,7 @@ impl DbInner {
 
 						},
 						LogAction::DropTable(id) => {
-							log::info!(
+							log::debug!(
 								target: "parity-db",
 								"Dropping index {}",
 								id,

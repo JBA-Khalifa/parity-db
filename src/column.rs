@@ -31,6 +31,7 @@ const START_BITS: u8 = 16;
 const MAX_REBALANCE_BATCH: u32 = 1024;
 
 pub type ColId = u8;
+pub type Salt = [u8; 32];
 
 struct Tables {
 	index: IndexTable,
@@ -50,6 +51,7 @@ pub struct Column {
 	uniform_keys: bool,
 	collect_stats: bool,
 	ref_counted: bool,
+	salt: Option<Salt>,
 	stats: ColumnStats,
 }
 
@@ -94,7 +96,7 @@ impl Column {
 		Ok(None)
 	}
 
-	pub fn open(col: ColId, options: &Options) -> Result<Column> {
+	pub fn open(col: ColId, options: &Options, salt: Option<Salt>) -> Result<Column> {
 		let (index, reindexing, stats) = Self::open_index(&options.path, col)?;
 		let collect_stats = options.stats;
 		let path = &options.path;
@@ -132,6 +134,7 @@ impl Column {
 			uniform_keys: options.uniform,
 			ref_counted: options.ref_counted,
 			collect_stats,
+			salt,
 			stats,
 		})
 	}
@@ -140,9 +143,10 @@ impl Column {
 		let mut k = Key::default();
 		if self.uniform_keys {
 			k.copy_from_slice(&key[0..32]);
+		} else if let Some(salt) = &self.salt {
+			k.copy_from_slice(blake2_rfc::blake2b::blake2b(32, &salt[..], &key).as_bytes());
 		} else {
-			k.copy_from_slice(blake2_rfc::blake2b::blake2b(32, &[], key).as_bytes());
-			//log::trace!(target: "parity-db", "HASH({})={}", hex(key), hex(&k));
+			k.copy_from_slice(blake2_rfc::blake2b::blake2b(32, &[], &key).as_bytes());
 		}
 		k
 	}
@@ -445,7 +449,7 @@ impl Column {
 				let mut source_index = progress;
 				let mut count = 0;
 				if source_index % 50 == 0 {
-					log::info!(target: "parity-db", "{}: Reindexing at {}/{}", tables.index.id, source_index, source.id.total_chunks());
+					log::debug!(target: "parity-db", "{}: Reindexing at {}/{}", tables.index.id, source_index, source.id.total_chunks());
 				}
 				log::debug!(target: "parity-db", "{}: Continue reindex at {}/{}", tables.index.id, source_index, source.id.total_chunks());
 				while source_index < source.id.total_chunks() && count < MAX_REBALANCE_BATCH {
